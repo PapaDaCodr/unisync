@@ -39,7 +39,7 @@ export async function execute(
 
     child.on("error", (err) => {
       // If .cmd failed, try the raw manager name (for bun which is an .exe)
-      if (process.platform === "win32" && (err as any).code === 'ENOENT') {
+      if (process.platform === "win32" && (err as { code?: string }).code === 'ENOENT') {
         const fallbackChild = spawn(manager, args, { stdio: "inherit" });
         fallbackChild.on("error", (e2) => {
           console.error(`psync: failed to run "${manager}": ${e2.message}`);

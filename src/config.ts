@@ -72,14 +72,15 @@ function readJson<T>(filePath: string): T | null {
 
     // Validate specific fields if they exist
     const VALID_MANAGERS = ["npm", "yarn", "pnpm", "bun"];
+    const p = parsed as Record<string, unknown>;
     
-    if ("canonicalManager" in parsed && !VALID_MANAGERS.includes((parsed as any).canonicalManager)) {
-      console.warn(`psync: invalid canonicalManager "${(parsed as any).canonicalManager}" in ${filePath}`);
+    if ("canonicalManager" in p && !VALID_MANAGERS.includes(p.canonicalManager as string)) {
+      console.warn(`psync: invalid canonicalManager "${p.canonicalManager}" in ${filePath}`);
       return null;
     }
 
-    if ("preferredManager" in parsed && !VALID_MANAGERS.includes((parsed as any).preferredManager)) {
-      console.warn(`psync: invalid preferredManager "${(parsed as any).preferredManager}" in ${filePath}`);
+    if ("preferredManager" in p && !VALID_MANAGERS.includes(p.preferredManager as string)) {
+      console.warn(`psync: invalid preferredManager "${p.preferredManager}" in ${filePath}`);
       return null;
     }
 

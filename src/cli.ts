@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { detectManager, listLockFiles, PackageManager } from "./detector";
+import { detectManager, listLockFiles, PackageManager, isManagerInstalled } from "./detector";
 import {
   readProjectConfig,
   writeProjectConfig,
@@ -12,6 +12,8 @@ import { installHooks, uninstallHooks } from "./hooks";
 import { syncLockFile, getNonCanonicalLockFiles, getLockFileName } from "./sync";
 import { execute } from "./executor";
 import readline from "readline";
+import path from "path";
+import fs from "fs"
 
 const MANAGERS: PackageManager[] = ["npm", "yarn", "pnpm", "bun"];
 
@@ -29,6 +31,10 @@ async function main(): Promise<void> {
       return sync(rest);
     case "install":
       return install();
+    case "verify":
+      return verify();
+    case "doctor":
+      return doctor();
     case "hooks":
       return hooks(rest);
     case "help":
@@ -224,6 +230,102 @@ async function install(): Promise<void> {
   process.exit(code);
 }
 
+// ── psync doctor ───────────────────────────────────────────────────
+
+async function doctor(): Promise<void> {
+  const cwd = process.cwd();
+  console.log("unisync doctor — diagnostic report\n");
+
+  let healthy = true;
+
+  // 1. Config Check
+  const projectConfig = readProjectConfig(cwd);
+  if (projectConfig) {
+    console.log(`  [OK] Project config found (.psyncrc.json)`);
+    console.log(`       Canonical manager: ${projectConfig.canonicalManager}`);
+  } else {
+    console.log(`  [!!] No project config found. Run "psync init".`);
+    healthy = false;
+  }
+
+  const localConfig = readLocalConfig(cwd);
+  if (localConfig) {
+    console.log(`  [OK] Local preference found (.psyncrc.local.json)`);
+    console.log(`       Preferred manager: ${localConfig.preferredManager}`);
+  } else {
+    console.log(`  [--] No local preference set. This is fine, will use detected.`);
+  }
+
+  // 2. Manager Check
+  console.log("\n  Checking package managers:");
+  for (const mgr of MANAGERS) {
+    const installed = await isManagerInstalled(mgr);
+    console.log(`       ${installed ? "[OK]" : "[  ]"} ${mgr}`);
+    if (projectConfig?.canonicalManager === mgr && !installed) {
+      console.log(`       [!!] Warning: Canonical manager "${mgr}" is not in your PATH.`);
+      healthy = false;
+    }
+  }
+
+  // 3. Git Check
+  const hasGit = await isManagerInstalled("git" as PackageManager);
+  if (hasGit) {
+    const hooksDir = path.join(cwd, ".git", "hooks");
+    if (fs.existsSync(hooksDir)) {
+      console.log(`\n  [OK] Git hooks directory found`);
+    } else {
+      console.log(`\n  [!!] Git directory found but no hooks. Run "psync hooks install".`);
+      healthy = false;
+    }
+  } else {
+    console.log(`\n  [!!] Git is not installed.`);
+    healthy = false;
+  }
+
+  if (healthy) {
+    console.log("\n  Result: Environment looks healthy! ✨");
+  } else {
+    console.log("\n  Result: Some issues found. Resolve them for best results.");
+    process.exit(1);
+  }
+}
+
+// ── psync verify ───────────────────────────────────────────────────
+
+function verify(): void {
+  const cwd = process.cwd();
+
+  const projectConfig = readProjectConfig(cwd);
+  if (!projectConfig) {
+    console.error('psync: no canonical manager configured. Run "psync init" first.');
+    process.exit(1);
+  }
+
+  const canonical = projectConfig.canonicalManager;
+  const lockFileName = getLockFileName(canonical);
+  const lockFilePath = path.join(cwd, lockFileName);
+
+  if (!fs.existsSync(lockFilePath)) {
+    console.error(`psync: canonical lock file "${lockFileName}" missing.`);
+    process.exit(1);
+  }
+
+  const existingContent = fs.readFileSync(lockFilePath, "utf-8");
+  
+  // Perform a sync
+  syncLockFile(cwd, canonical);
+  const newContent = fs.readFileSync(lockFilePath, "utf-8");
+
+  // If we changed it, it wasn't verified
+  if (existingContent !== newContent) {
+    console.error(`\npsync: [FAIL] Canonical lock file "${lockFileName}" was out of sync!`);
+    console.error(`             It has been updated. Please commit the changes.`);
+    process.exit(1);
+  }
+
+  console.log(`\npsync: [PASS] Canonical lock file "${lockFileName}" is in sync.`);
+}
+
 // ── psync hooks ────────────────────────────────────────────────────
 
 function hooks(args: string[]): void {
@@ -262,6 +364,8 @@ Commands:
   psync init          Set up the canonical manager for this project (project owner)
   psync setup         Configure your preferred manager (collaborators)
   psync detect        Show current configuration and detected lock files
+  psync doctor        Run environment health check
+  psync verify        CI/CD check: verify lock file is in sync
   psync sync          Manually sync: pin versions + regenerate canonical lock
   psync install       Run your preferred manager's install
   psync hooks install Install git hooks

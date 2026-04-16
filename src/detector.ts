@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { execSync } from "child_process";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -53,6 +54,27 @@ export function detectManager(startDir: string = process.cwd()): PackageManager 
   }
 
   return null;
+}
+
+/**
+ * Check if a package manager is installed on the system.
+ */
+export async function isManagerInstalled(manager: PackageManager): Promise<boolean> {
+  const cmd = process.platform === "win32" ? "where" : "command -v";
+  try {
+    execSync(`${cmd} ${manager}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    if (process.platform === "win32") {
+      try {
+        execSync(`where ${manager}.cmd`, { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
 }
 
 /**
