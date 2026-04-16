@@ -1,0 +1,15 @@
+version: 2
+projectIgnorePaths:
+  - "node_modules"
+  - "dist"
+issueRules:
+  malware: error
+  telemetry: error
+  troll: error
+  hiddenCode: error
+  typosquat: error
+  installScripts: warning
+  networkAccess: error
+  cve: error
+  unclearLicense: error
+  nonPermissiveLicense: warning

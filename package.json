@@ -1,0 +1,36 @@
+{
+  "name": "package-sync",
+  "version": "0.1.0",
+  "description": "Universal package manager interceptor — use any package manager, one lock file stays in charge.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "psync": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "package-manager",
+    "npm",
+    "yarn",
+    "pnpm",
+    "bun",
+    "lockfile",
+    "sync"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "20.14.0",
+    "typescript": "5.4.5"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
