@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "tsc -p tsconfig.test.json && node --test .tests/tests/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -26,7 +26,6 @@
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "20.14.0",
-    "tsx": "^4.21.0",
     "typescript": "5.4.5"
   },
   "files": [
