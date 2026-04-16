@@ -45,6 +45,7 @@ unisync works like how git handles line endings — transparently.
 
 ### Project Owner (one-time setup)
 
+
 ```bash
 npx unisync init
 ```
