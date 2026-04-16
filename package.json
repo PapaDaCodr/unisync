@@ -1,6 +1,6 @@
 {
   "name": "unisync",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Universal package manager interceptor — use any package manager, one lock file stays in charge.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
