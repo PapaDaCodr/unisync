@@ -19,7 +19,8 @@
     "pnpm",
     "bun",
     "lockfile",
-    "sync"
+    "sync",
+    "unisync"
   ],
   "author": "",
   "license": "MIT",
