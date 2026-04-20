@@ -93,9 +93,9 @@ async function init(): Promise<void> {
     ) as PackageManager;
   }
 
-  // 2. Write project config
-  writeProjectConfig(cwd, { canonicalManager: canonical });
-  console.log(`\nCreated .psyncrc.json (canonical: ${canonical})`);
+  // 2. Write project config — warn-mode by default for safe rollout
+  writeProjectConfig(cwd, { canonicalManager: canonical, enforce: "warn" });
+  console.log(`\nCreated .psyncrc.json (canonical: ${canonical}, enforce: warn)`);
 
   // 3. Update .gitignore
   const nonCanonical = getNonCanonicalLockFiles(canonical);
@@ -105,9 +105,9 @@ async function init(): Promise<void> {
   // 4. Wire psync into the project's preinstall so teammates bootstrap automatically.
   addPreinstallHook(cwd);
 
-  // 5. Install git hooks
+  // 5. Install git hooks (warn mode to start — flip to block once team is settled)
   try {
-    installHooks(cwd, canonical);
+    installHooks(cwd, canonical, canonical, "warn");
     console.log("Installed git hooks (pre-commit, post-merge, post-checkout)");
   } catch (err) {
     console.warn(`Warning: could not install git hooks: ${(err as Error).message}`);
@@ -156,7 +156,7 @@ async function setup(): Promise<void> {
 
   // 3. Install git hooks
   try {
-    installHooks(cwd, projectConfig.canonicalManager, preferred);
+    installHooks(cwd, projectConfig.canonicalManager, preferred, projectConfig.enforce ?? "warn");
     console.log("Installed git hooks");
   } catch (err) {
     console.warn(`Warning: could not install git hooks: ${(err as Error).message}`);
@@ -187,6 +187,7 @@ function detect(): void {
 
   if (projectConfig) {
     console.log(`  Canonical manager : ${projectConfig.canonicalManager}`);
+    console.log(`  Enforce mode      : ${projectConfig.enforce ?? "warn"}`);
   } else {
     console.log("  Canonical manager : not configured (run 'psync init')");
   }
@@ -213,6 +214,7 @@ function detect(): void {
 
 function sync(args: string[]): void {
   const cwd = process.cwd();
+  const check = args.includes("--check");
 
   const projectConfig = readProjectConfig(cwd);
   if (!projectConfig) {
@@ -222,8 +224,17 @@ function sync(args: string[]): void {
       console.error('psync: no canonical manager configured. Run "psync init" first.');
       process.exit(1);
     }
+    if (check) {
+      // Phase 1 placeholder: --check is a no-op until Phase 2 ships real diff.
+      return;
+    }
     console.log(`psync: no config found, using detected manager: ${detected}`);
     syncLockFile(cwd, detected);
+    return;
+  }
+
+  if (check) {
+    // Phase 1 placeholder: --check is a no-op until Phase 2 ships real diff.
     return;
   }
 
@@ -410,8 +421,8 @@ function hooks(args: string[]): void {
       process.exit(1);
     }
     const localConfig = readLocalConfig(cwd);
-    installHooks(cwd, config.canonicalManager, localConfig?.preferredManager);
-    console.log("psync: git hooks installed");
+    installHooks(cwd, config.canonicalManager, localConfig?.preferredManager, config.enforce ?? "warn");
+    console.log(`psync: git hooks installed (enforce: ${config.enforce ?? "warn"})`);
     return;
   }
 

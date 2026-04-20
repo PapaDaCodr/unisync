@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { PackageManager } from "./detector";
+import { EnforceMode } from "./config";
 
 const PSYNC_MARKER_START = "# >>> unisync hooks >>>";
 const PSYNC_MARKER_END = "# <<< unisync hooks <<<";
@@ -20,6 +21,7 @@ export function installHooks(
   projectDir: string,
   canonicalManager: PackageManager,
   preferredManager: PackageManager = canonicalManager,
+  enforce: EnforceMode = "warn",
 ): void {
   const gitDir = findGitDir(projectDir);
   if (!gitDir) {
@@ -33,8 +35,8 @@ export function installHooks(
 
   const canonicalLock = LOCK_FILE_MAP[canonicalManager];
 
-  // Pre-commit: sync lock file before committing (runs on canonical manager standard)
-  writeHook(hooksDir, "pre-commit", preCommitScript(canonicalLock, preferredManager));
+  // Pre-commit: either enforce sync (block) or just warn on drift (warn)
+  writeHook(hooksDir, "pre-commit", preCommitScript(canonicalLock, preferredManager, enforce));
 
   // Post-merge: reinstall after pulling changes
   writeHook(hooksDir, "post-merge", postMergeScript(canonicalLock, preferredManager));
@@ -112,13 +114,29 @@ function getExecCmd(manager: PackageManager): string {
   }
 }
 
-function preCommitScript(canonicalLock: string, preferred: PackageManager): string {
+function preCommitScript(
+  canonicalLock: string,
+  preferred: PackageManager,
+  enforce: EnforceMode,
+): string {
   const exec = getExecCmd(preferred);
-  return `${PSYNC_MARKER_START}
-# unisync: sync canonical lock file on commit
+  if (enforce === "block") {
+    return `${PSYNC_MARKER_START}
+# unisync: enforce=block — sync canonical lock file on commit
 if git diff --cached --name-only | grep -q "^package.json$"; then
   ${exec} psync sync --stage
   git add package.json ${canonicalLock}
+fi
+${PSYNC_MARKER_END}`;
+  }
+  // enforce=warn: log drift, never mutate. Never exits non-zero.
+  return `${PSYNC_MARKER_START}
+# unisync: enforce=warn — report drift without mutating
+if git diff --cached --name-only | grep -q "^package.json$"; then
+  if ! ${exec} psync sync --check >/dev/null 2>&1; then
+    echo "unisync: [warn] ${canonicalLock} would drift from package.json"
+    echo "unisync:        run your install command to sync, or switch to enforce=block"
+  fi
 fi
 ${PSYNC_MARKER_END}`;
 }

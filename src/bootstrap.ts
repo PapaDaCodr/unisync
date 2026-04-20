@@ -98,7 +98,7 @@ export function autoBootstrap(cwd: string, psyncVersion: string): AutoBootstrapR
     detected ?? existingLocal?.preferredManager ?? projectConfig.canonicalManager;
 
   try {
-    installHooks(cwd, projectConfig.canonicalManager, preferred);
+    installHooks(cwd, projectConfig.canonicalManager, preferred, projectConfig.enforce ?? "warn");
   } catch (err) {
     return { status: "error", detail: (err as Error).message };
   }

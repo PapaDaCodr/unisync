@@ -5,9 +5,14 @@ import { PackageManager } from "./detector";
 const PROJECT_CONFIG = ".psyncrc.json";
 const LOCAL_CONFIG = ".psyncrc.local.json";
 
+/** How strictly the pre-commit hook enforces lock-file sync. */
+export type EnforceMode = "warn" | "block";
+
 /** Project-wide config — committed to git. */
 export interface ProjectConfig {
   canonicalManager: PackageManager;
+  /** "warn" logs drift but doesn't mutate; "block" auto-syncs and stages. Default: "warn". */
+  enforce?: EnforceMode;
 }
 
 /** Per-developer config — gitignored. */
@@ -81,6 +86,11 @@ function readJson<T>(filePath: string): T | null {
 
     if ("preferredManager" in p && !VALID_MANAGERS.includes(p.preferredManager as string)) {
       console.warn(`psync: invalid preferredManager "${p.preferredManager}" in ${filePath}`);
+      return null;
+    }
+
+    if ("enforce" in p && p.enforce !== "warn" && p.enforce !== "block") {
+      console.warn(`psync: invalid enforce mode "${p.enforce}" in ${filePath}, expected "warn" or "block"`);
       return null;
     }
 
