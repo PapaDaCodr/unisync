@@ -29,6 +29,20 @@ export interface SyncResult {
   packagesResolved: number;
 }
 
+export interface CheckResult {
+  lockFilePath: string;
+  /** What the lock file would contain after sync. */
+  generatedContent: string;
+  /** What the lock file currently contains (empty string if absent). */
+  existingContent: string;
+  /** True if package.json has unpinned ranges that sync would strip. */
+  packageJsonWouldChange: boolean;
+  /** True if the lock file would change (differs from existing). */
+  lockFileWouldChange: boolean;
+  /** Total packages in the generated graph. */
+  packagesResolved: number;
+}
+
 /**
  * The core sync operation:
  * 1. Pin versions in package.json (strip ^/~)
@@ -69,6 +83,80 @@ export function syncLockFile(
     versionsPinned: pinned,
     packagesResolved: graph.size,
   };
+}
+
+/**
+ * Non-mutating counterpart of syncLockFile. Computes what sync would
+ * produce without touching disk. Caller decides what to do with the
+ * result (diff, exit non-zero, write to a report file, etc).
+ */
+export function checkLockFile(
+  projectDir: string,
+  canonicalManager: PackageManager,
+): CheckResult {
+  const pkgJsonPath = path.join(projectDir, "package.json");
+  const originalPkgRaw = fs.existsSync(pkgJsonPath)
+    ? fs.readFileSync(pkgJsonPath, "utf-8")
+    : "";
+
+  // Build an in-memory pinned snapshot without persisting it.
+  const originalPkg = originalPkgRaw ? JSON.parse(originalPkgRaw) : {};
+  const pinnedPkg = cloneWithPinnedVersions(originalPkg);
+  const packageJsonWouldChange =
+    JSON.stringify(pinnedPkg) !== JSON.stringify(originalPkg);
+
+  const graph = resolveFromNodeModules(projectDir);
+  const generator = GENERATORS[canonicalManager];
+  const generatedContent = generator.generate(graph, pinnedPkg);
+
+  const lockFileName = LOCK_FILES[canonicalManager];
+  const lockFilePath = path.join(projectDir, lockFileName);
+  const existingContent = fs.existsSync(lockFilePath)
+    ? fs.readFileSync(lockFilePath, "utf-8")
+    : "";
+
+  return {
+    lockFilePath,
+    generatedContent,
+    existingContent,
+    packageJsonWouldChange,
+    lockFileWouldChange: existingContent !== generatedContent,
+    packagesResolved: graph.size,
+  };
+}
+
+/**
+ * In-memory version of pinner.stripRange, so checkLockFile stays pure.
+ * Keeps the same carve-outs: workspace:/file:/link:/npm:/git/http, *, latest.
+ */
+function cloneWithPinnedVersions(pkg: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = JSON.parse(JSON.stringify(pkg));
+  const fields = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+  for (const field of fields) {
+    const deps = copy[field];
+    if (!deps || typeof deps !== "object") continue;
+    for (const [name, range] of Object.entries(deps as Record<string, unknown>)) {
+      if (typeof range !== "string") continue;
+      (deps as Record<string, string>)[name] = stripRangeInPlace(range);
+    }
+  }
+  return copy;
+}
+
+function stripRangeInPlace(version: string): string {
+  if (
+    version.startsWith("workspace:") ||
+    version.startsWith("file:") ||
+    version.startsWith("link:") ||
+    version.startsWith("npm:") ||
+    version.startsWith("git") ||
+    version.startsWith("http") ||
+    version === "*" ||
+    version === "latest"
+  ) {
+    return version;
+  }
+  return version.replace(/^[\^~]|^[><=]+\s*/g, "");
 }
 
 /**

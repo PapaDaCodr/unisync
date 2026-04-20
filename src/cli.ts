@@ -9,7 +9,7 @@ import {
   ensureGitignore,
 } from "./config";
 import { installHooks, uninstallHooks } from "./hooks";
-import { syncLockFile, getNonCanonicalLockFiles, getLockFileName } from "./sync";
+import { syncLockFile, checkLockFile, getNonCanonicalLockFiles, getLockFileName } from "./sync";
 import { execute } from "./executor";
 import { autoBootstrap } from "./bootstrap";
 import readline from "readline";
@@ -217,32 +217,68 @@ function sync(args: string[]): void {
   const check = args.includes("--check");
 
   const projectConfig = readProjectConfig(cwd);
-  if (!projectConfig) {
-    // Fall back to detection
-    const detected = detectManager(cwd);
-    if (!detected) {
-      console.error('psync: no canonical manager configured. Run "psync init" first.');
-      process.exit(1);
-    }
-    if (check) {
-      // Phase 1 placeholder: --check is a no-op until Phase 2 ships real diff.
-      return;
-    }
-    console.log(`psync: no config found, using detected manager: ${detected}`);
-    syncLockFile(cwd, detected);
-    return;
+  const canonical = projectConfig?.canonicalManager ?? detectManager(cwd);
+
+  if (!canonical) {
+    console.error('psync: no canonical manager configured. Run "psync init" first.');
+    process.exit(1);
   }
 
   if (check) {
-    // Phase 1 placeholder: --check is a no-op until Phase 2 ships real diff.
-    return;
+    const drift = checkLockFile(cwd, canonical);
+    if (!drift.packageJsonWouldChange && !drift.lockFileWouldChange) {
+      return;
+    }
+    const lockName = getLockFileName(canonical);
+    console.error(`psync: drift detected`);
+    if (drift.packageJsonWouldChange) {
+      console.error(`       package.json has unpinned version ranges`);
+    }
+    if (drift.lockFileWouldChange) {
+      console.error(`       ${lockName} is out of sync (${drift.packagesResolved} packages resolved)`);
+      const preview = unifiedDiff(drift.existingContent, drift.generatedContent, lockName);
+      if (preview) console.error(preview);
+    }
+    console.error(`\n       fix: run your install command (npm/yarn/pnpm/bun install)`);
+    process.exit(1);
   }
 
-  const result = syncLockFile(cwd, projectConfig.canonicalManager);
+  if (!projectConfig) {
+    console.log(`psync: no config found, using detected manager: ${canonical}`);
+  }
+
+  const result = syncLockFile(cwd, canonical);
   console.log(
     `psync: sync complete — ${result.packagesResolved} packages, ` +
       `versions ${result.versionsPinned ? "pinned" : "unchanged"}`,
   );
+}
+
+/**
+ * Minimal unified-diff producer. We don't ship a full diff algorithm for
+ * generated lock files; a head-of-file slice is enough to show a human
+ * that content differs without dumping megabytes into CI logs.
+ */
+function unifiedDiff(a: string, b: string, label: string): string {
+  const aLines = a.split("\n");
+  const bLines = b.split("\n");
+  let firstDiff = 0;
+  const max = Math.max(aLines.length, bLines.length);
+  while (firstDiff < max && aLines[firstDiff] === bLines[firstDiff]) firstDiff++;
+  if (firstDiff === max) return "";
+  const start = Math.max(0, firstDiff - 2);
+  const end = Math.min(max, firstDiff + 6);
+  const out: string[] = [`--- ${label} (on disk)`, `+++ ${label} (would generate)`];
+  for (let i = start; i < end; i++) {
+    const av = aLines[i];
+    const bv = bLines[i];
+    if (av === bv) out.push(`  ${av ?? ""}`);
+    else {
+      if (av !== undefined) out.push(`- ${av}`);
+      if (bv !== undefined) out.push(`+ ${bv}`);
+    }
+  }
+  return out.join("\n");
 }
 
 // Adds `preinstall: npx --yes psync auto || true` to the project's
@@ -388,24 +424,27 @@ function verify(): void {
   const lockFilePath = path.join(cwd, lockFileName);
 
   if (!fs.existsSync(lockFilePath)) {
-    console.error(`psync: canonical lock file "${lockFileName}" missing.`);
+    console.error(`psync: [FAIL] canonical lock file "${lockFileName}" missing.`);
     process.exit(1);
   }
 
-  const existingContent = fs.readFileSync(lockFilePath, "utf-8");
-  
-  // Perform a sync
-  syncLockFile(cwd, canonical);
-  const newContent = fs.readFileSync(lockFilePath, "utf-8");
-
-  // If we changed it, it wasn't verified
-  if (existingContent !== newContent) {
-    console.error(`\npsync: [FAIL] Canonical lock file "${lockFileName}" was out of sync!`);
-    console.error(`             It has been updated. Please commit the changes.`);
-    process.exit(1);
+  // Non-mutating: compute what sync would produce, compare, never write.
+  const drift = checkLockFile(cwd, canonical);
+  if (!drift.packageJsonWouldChange && !drift.lockFileWouldChange) {
+    console.log(`psync: [PASS] canonical lock file "${lockFileName}" is in sync.`);
+    return;
   }
 
-  console.log(`\npsync: [PASS] Canonical lock file "${lockFileName}" is in sync.`);
+  console.error(`psync: [FAIL] drift detected in "${lockFileName}"`);
+  if (drift.packageJsonWouldChange) {
+    console.error(`             package.json has unpinned ranges that sync would strip`);
+  }
+  if (drift.lockFileWouldChange) {
+    const preview = unifiedDiff(drift.existingContent, drift.generatedContent, lockFileName);
+    if (preview) console.error(preview);
+  }
+  console.error(`             fix: run your install command (npm/yarn/pnpm/bun install)`);
+  process.exit(1);
 }
 
 // ── psync hooks ────────────────────────────────────────────────────
