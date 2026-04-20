@@ -11,9 +11,22 @@ import {
 import { installHooks, uninstallHooks } from "./hooks";
 import { syncLockFile, getNonCanonicalLockFiles, getLockFileName } from "./sync";
 import { execute } from "./executor";
+import { autoBootstrap } from "./bootstrap";
 import readline from "readline";
 import path from "path";
 import fs from "fs"
+
+// Read our own version once, used for bootstrap fingerprinting.
+function readPsyncVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"),
+    );
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 const MANAGERS: PackageManager[] = ["npm", "yarn", "pnpm", "bun"];
 
@@ -31,6 +44,8 @@ async function main(): Promise<void> {
       return sync(rest);
     case "install":
       return install();
+    case "auto":
+      return auto();
     case "verify":
       return verify();
     case "doctor":
@@ -84,10 +99,13 @@ async function init(): Promise<void> {
 
   // 3. Update .gitignore
   const nonCanonical = getNonCanonicalLockFiles(canonical);
-  ensureGitignore(cwd, [...nonCanonical, ".psyncrc.local.json"]);
+  ensureGitignore(cwd, [...nonCanonical, ".psyncrc.local.json", ".psync/"]);
   console.log("Updated .gitignore (non-canonical lock files + local config)");
 
-  // 4. Install git hooks
+  // 4. Wire psync into the project's preinstall so teammates bootstrap automatically.
+  addPreinstallHook(cwd);
+
+  // 5. Install git hooks
   try {
     installHooks(cwd, canonical);
     console.log("Installed git hooks (pre-commit, post-merge, post-checkout)");
@@ -95,13 +113,13 @@ async function init(): Promise<void> {
     console.warn(`Warning: could not install git hooks: ${(err as Error).message}`);
   }
 
-  // 5. Instructions
+  // 6. Instructions
   console.log(`
 Setup complete! Here's what happens now:
 
   1. You work normally with "${canonical}"
-  2. Collaborators clone the repo and run: npx unisync setup
-  3. They pick their preferred manager and work normally
+  2. Teammates clone and run their usual install (npm / yarn / pnpm / bun)
+  3. The preinstall hook auto-bootstraps them — no command to remember
   4. Git hooks keep ${getLockFileName(canonical)} in sync automatically
 
 Share this with your team:
@@ -214,6 +232,59 @@ function sync(args: string[]): void {
     `psync: sync complete — ${result.packagesResolved} packages, ` +
       `versions ${result.versionsPinned ? "pinned" : "unchanged"}`,
   );
+}
+
+// Adds `preinstall: npx --yes psync auto || true` to the project's
+// package.json so every install (npm/yarn/pnpm/bun) auto-bootstraps.
+// Leaves an existing preinstall script alone if it already runs psync.
+function addPreinstallHook(cwd: string): void {
+  const pkgPath = path.join(cwd, "package.json");
+  if (!fs.existsSync(pkgPath)) return;
+
+  const raw = fs.readFileSync(pkgPath, "utf-8");
+  let pkg: Record<string, unknown>;
+  try {
+    pkg = JSON.parse(raw);
+  } catch {
+    console.warn("psync: skipping preinstall wiring — package.json is not valid JSON");
+    return;
+  }
+
+  const scripts = ((pkg.scripts as Record<string, string> | undefined) ?? {});
+  const desired = "npx --yes psync auto || true";
+  const current = scripts.preinstall;
+
+  if (current && current.includes("psync auto")) return;
+
+  if (current && current.trim().length > 0) {
+    scripts.preinstall = `${desired} && ${current}`;
+  } else {
+    scripts.preinstall = desired;
+  }
+  pkg.scripts = scripts;
+
+  const indentMatch = raw.match(/^(\s+)"/m);
+  const indent = indentMatch ? indentMatch[1].length : 2;
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, indent) + "\n");
+  console.log("Added preinstall hook to package.json (teammates auto-bootstrap on install)");
+}
+
+// ── psync auto ─────────────────────────────────────────────────────
+// Invoked from a package.json preinstall script. Idempotent, silent on
+// success, NEVER exits non-zero — a failing bootstrap must not break install.
+
+function auto(): void {
+  try {
+    const result = autoBootstrap(process.cwd(), readPsyncVersion());
+    if (process.env.PSYNC_AUTO_DEBUG) {
+      console.log(`psync auto: ${result.status}${result.detail ? " — " + result.detail : ""}`);
+    }
+  } catch (err) {
+    if (process.env.PSYNC_AUTO_DEBUG) {
+      console.error(`psync auto: unexpected error: ${(err as Error).message}`);
+    }
+  }
+  // Always exit 0. Never block install.
 }
 
 // ── psync install ──────────────────────────────────────────────────
@@ -363,6 +434,7 @@ unisync (psync) — Use any package manager. One lock file stays in charge.
 Commands:
   psync init          Set up the canonical manager for this project (project owner)
   psync setup         Configure your preferred manager (collaborators)
+  psync auto          Silent bootstrap (wired into preinstall — you rarely run this)
   psync detect        Show current configuration and detected lock files
   psync doctor        Run environment health check
   psync verify        CI/CD check: verify lock file is in sync
